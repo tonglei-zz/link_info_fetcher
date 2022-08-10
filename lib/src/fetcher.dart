@@ -21,18 +21,32 @@ class LinkInfo {
   });
 }
 
+const defaultUserAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.121 Safari/537.36";
+
 Future<LinkInfo?> fetchLinkInfo(String url, {String? userAgent}) async {
   if (!url.toLowerCase().startsWith('http')) {
     url = 'https://$url';
   }
 
   final uri = Uri.parse(url);
-  final response = await http
-      .get(uri, headers: {if (userAgent != null) 'User-Agent': userAgent});
+  final response = await http.get(uri, headers: {
+    'User-Agent': userAgent ?? defaultUserAgent,
+    'Accept':
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+    // 'Accept-Encoding': 'gzip, deflate, br',
+    // 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+    // 'Host': uri.host,
+    // 'Referer': url
+  });
 
-  String? html;
+  // print(response.request?.headers);
+
+  print(response.statusCode);
 
   if (response.statusCode == 200) {
+    String? html;
+    Document? document;
     try {
       html = utf8.decode(response.bodyBytes);
     } catch (e) {
@@ -43,62 +57,52 @@ Future<LinkInfo?> fetchLinkInfo(String url, {String? userAgent}) async {
       }
     }
 
-    print(html);
-
-    if (html == null) {
+    try {
+      if (html == null) {
+        document = parse(response.bodyBytes);
+      } else {
+        document = parse(html);
+      }
+    } catch (e) {
+      print(e);
       return null;
     }
-  }
 
-  final document = parse(html);
-  // final openGraphMetaTags =
-  //     document.head?.querySelectorAll("[property*='og:']");
-  // var requiredAttributes = ['title', 'image'];
-  // openGraphMetaTags?.forEach((element) {
-  //   var ogTagTitle = element.attributes['property']?.split("og:")[1];
-  //   var ogTagValue = element.attributes['content'];
-  //   if ((ogTagValue != null && ogTagValue != "") ||
-  //       requiredAttributes.contains(ogTagTitle)) {
-  //     if (ogTagTitle == "image" && !ogTagValue!.startsWith("http")) {
-  //       data[ogTagTitle] = "http://" + _extractHost(url) + ogTagValue;
-  //     } else {
-  //       data[ogTagTitle] = ogTagValue;
-  //     }
-  //   }
-  // });
-
-  String? title = _getMetaContent(document, 'og:title') ??
-      _getMetaContent(document, 'twitter:title') ??
-      _getMetaContent(document, 'og:site_name');
-  if (title == null || title.isEmpty) {
-    final titleElements = document.getElementsByTagName('title');
-    if (titleElements.isNotEmpty) {
-      title = titleElements.first.text;
-    }
-  }
-
-  //descritpion
-  String? description = _getMetaContent(document, 'og:description') ??
-      _getMetaContent(document, 'description') ??
-      _getMetaContent(document, 'twitter:description');
-  if (description == null || description.isEmpty) {
-    var meta = document.getElementsByTagName("meta");
-    var metaDescriptions =
-        meta.where((e) => e.attributes["name"] == "description");
-
-    if (metaDescriptions.isNotEmpty) {
-      description = metaDescriptions.first.attributes["content"];
+    String? title = _getMetaContent(document, 'og:title') ??
+        _getMetaContent(document, 'twitter:title') ??
+        _getMetaContent(document, 'og:site_name');
+    if (title == null || title.isEmpty) {
+      final titleElements = document.getElementsByTagName('title');
+      if (titleElements.isNotEmpty) {
+        title = titleElements.first.text;
+      }
     }
 
-    if (description == null || description != "") {
-      description = document.head?.getElementsByTagName("title").first.text;
+    //descritpion
+    String? description = _getMetaContent(document, 'og:description') ??
+        _getMetaContent(document, 'description') ??
+        _getMetaContent(document, 'twitter:description');
+    if (description == null || description.isEmpty) {
+      var meta = document.getElementsByTagName("meta");
+      var metaDescriptions =
+          meta.where((e) => e.attributes["name"] == "description");
+
+      if (metaDescriptions.isNotEmpty) {
+        description = metaDescriptions.first.attributes["content"];
+      }
+
+      if (description == null || description != "") {
+        description = document.head?.getElementsByTagName("title").first.text;
+      }
     }
+
+    // image
+    String? image = _getImageUrls(document, url);
+
+    return LinkInfo(url, title: title, descrition: description, image: image);
   }
 
-  // image
-  String? image = _getImageUrls(document, url);
-
-  return LinkInfo(url, title: title, descrition: description, image: image);
+  return null;
 }
 
 String? _getImageUrls(Document document, String baseUrl) {
@@ -118,10 +122,23 @@ String? _getImageUrls(Document document, String baseUrl) {
   }
 
   String? imageSrc = elements.first.attributes[attribute]?.trim();
-  if (imageSrc != null && !imageSrc.startsWith("http")) {
-    imageSrc = "http://${_extractHost(baseUrl)}$imageSrc";
+
+  if (imageSrc != null) {
+    if (imageSrc.contains('.svg') || imageSrc.contains('.gif')) return null;
+
+    if (imageSrc.startsWith('data')) return null;
+
+    if (imageSrc.startsWith('//')) imageSrc = 'http:$imageSrc';
+
+    if (!imageSrc.startsWith("http")) {
+      if (imageSrc.startsWith("/")) {
+        imageSrc = "http://${_extractHost(baseUrl)}$imageSrc";
+      } else {
+        imageSrc = "http://${_extractHost(baseUrl)}/$imageSrc";
+      }
+    }
+    return imageSrc;
   }
-  return imageSrc;
 
   // return elements.fold<List<String>>([], (previousValue, element) {
   //   String? imageSrc = element.attributes[attribute]?.trim();
